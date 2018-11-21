@@ -10,6 +10,7 @@
 
 #include "cdcdf_acm.h"
 #include "cdcdf_acm_desc.h"
+#include <stdio.h>
 
 #ifdef __cplusplus
 extern "C" {

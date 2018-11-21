@@ -20,6 +20,7 @@ typedef struct {
 } outData_t;
 
 typedef struct {
+	char     buff[USB_BUFFER_SIZE];
 	volatile bool ready;				// insertion index to the buffer
 	volatile uint32_t sent;				// indicates if the bus is ready for an IN transaction (the last one finished)
 	volatile enum usb_xfer_code lastCode;	// transfer code of the last completed transaction
@@ -129,6 +130,17 @@ int32_t usb_start(void)
 
 	err = cdcdf_acm_register_callback(CDCDF_ACM_CB_STATE_C, (FUNC_PTR)usb_line_state_changed);
 
+#if defined(__GNUC__)
+	/* Specify that stdout and stdin should not be buffered. */
+	setvbuf(stdout, inbuf.buff, _IOLBF, USB_BUFFER_SIZE);
+	setbuf(stdin, NULL);
+	/* Note: Already the case in IAR's Normal DLIB default configuration
+	 * and AVR GCC library:
+	 * - printf() emits one character at a time.
+	 * - getchar() requests only 1 byte to exit.
+	 */
+#endif
+
 	return err;
 }
 
@@ -178,11 +190,20 @@ int32_t usb_write(void* outData, uint32_t BUFFER_SIZE)
 		err = cdcdf_acm_write((uint8_t*)outData, BUFFER_SIZE);
 	}
 
-    while(!inbuf.ready) {}
+	uint32_t timer = 3;
+	do {
+		delay_ms(1);
+		--timer;
+	} while( !inbuf.ready && timer > 0);
 
-	return  err;
+	// clear RX-buffer flag since something went wrong (possibly terminal not connected?)
+	if(0 == timer) {
+		inbuf.ready = true;
+		err = (err < 0 ? err : -1);
+	}
+
+	return  (err == ERR_NONE ? BUFFER_SIZE : err);
 }
-
 
 /************************ RECEIVING DATA ****************************************/
 int32_t usb_available()
@@ -248,4 +269,37 @@ int32_t usb_flushRx(void)
 	outbuf.head = 0;
 	outbuf.tail = 0;
 	return ERR_NONE;
+}
+
+/************************ STDIO INTERACTION ****************************************/
+
+
+int __attribute__((weak)) _read(int file, char *ptr, int len); /* Remove GCC compiler warning */
+int __attribute__((weak)) _write(int file, char *ptr, int len); /* Remove GCC compiler warning */
+
+int __attribute__((weak)) _read(int file, char *ptr, int len)
+{
+	int n = -1;
+
+	if (file == 0) {
+		n = usb_read((uint8_t *)ptr, len);
+	}
+
+	return ( n < 0 ? -1 : n );
+}
+
+int __attribute__((weak)) _write(int file, char *ptr, int len)
+{
+	int n = -1;
+
+	if ((file == 1) || (file == 2) || (file == 3)) {
+		if(usb_dtr()) {
+			n = usb_write((const uint8_t *)ptr, len);
+		}
+		else {
+			n = len;
+		}
+	}
+
+	return (n < 0 ? -1 : n);
 }
